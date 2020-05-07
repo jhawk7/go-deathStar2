@@ -9,13 +9,6 @@ import (
 	"sync"
 )
 
-type Config struct {
-	ClientId string
-	Secret string
-	TokenUrl string
-	HttpClient *http.Client
-}
-
 const MAX_ROUTINES int = 10000
 
 func main() {
