@@ -7,82 +7,123 @@ import (
 	_ "io"
 	"log"
 	"net/http"
-	"os"
+	_ "os"
 	"sync"
 
 	retryablehttp "github.com/hashicorp/go-retryablehttp"
+	"github.com/jhawk7/go-deathStar2/pkg/opentel"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	_ "go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/global"
 )
 
 const MAX_ROUTINES int = 5
 const EXPECTED_RESPONSE_CODE int = 200
-const tracerName string = "deathstar"
-
-var outfile *os.File
+const serviceName string = "deathstar"
+var ds_meter metric.Meter
+//var outfile *os.File
 var SUCCESSES int = 0
 
-// returns a standard console exporter.
-/*func newStdExporter(w io.Writer) (sdktrace.SpanExporter, error) {
-	// Write telemetry data to a file.
-	os.Remove("traces.txt")
-	f, err := os.Create("traces.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-	outfile = f
+func main() {
+	method := "GET"
+	body := []byte(nil)
+	url := "http://node5.local/isgomuxup"
 
-	return stdout.New(
-		stdout.WithWriter(w),
-		// Use human-readable output.
-		stdout.WithPrettyPrint(),
-		// Do not print timestamps for the demo.
-		stdout.WithoutTimestamps(),
-	)
-}*/
+	var wg sync.WaitGroup // create wait group (empty struct)
+	ctx := context.Background()
 
-func initTraceProvider() *sdktrace.TracerProvider {
-	//configure grpc exporter
-	//exp_url := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") //should use localhost:4317 by default
-	exporter, expErr := otlptracegrpc.New(context.Background() /*otlptracegrpc.WithEndpoint(exp_url)*/)
-	if expErr != nil {
-		//fmt.Errorf("error initializing exporter [error: %v]", expErr)
-		log.Fatal(expErr)
+	//init global meter provider
+	mp, mpErr := opentel.InitMeterProvider()
+	if mpErr != nil {
+		log.Fatal(mpErr)
 	}
 
-	//configure trace provider resource to describe this application
-	r, _ := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceNameKey.String(tracerName),
-			semconv.ServiceVersionKey.String("v0.1.0"),
-			attribute.String("environment", "development"),
-		),
-	)
+	//register meterProvider as global mp for package (meterProvider -> meter -> counter)
+	global.SetMeterProvider(mp)
 
-	//register exporter with new trace provider
-	tp := sdktrace.NewTracerProvider(
-		//register exporter with trace provider using BatchSpanProcessor
-		sdktrace.WithBatcher(exporter),
-		//configure resource to be used in all traces from trace provider
-		sdktrace.WithResource(r),
-		//setup sampler to always sample traces
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
-	)
+	//start metric collection
+	if collectErr := mp.Start(ctx); collectErr != nil {
+		log.Fatal(collectErr)
+	}
 
-	//register traceprovider as global tp
+	//create meter from meter provider (set to global variable)
+	ds_meter = global.Meter("deathstar_meter")
+
+	//init global trace provider
+	tp, tpErr := opentel.InitTraceProvider()
+	if tpErr != nil {
+		log.Fatal(tpErr)
+	}
+
+	//register traceprovider as global tp for package (traceProvider -> trace -> span)
 	otel.SetTracerProvider(tp)
 
-	return tp
+	//defer func to flush and stop trace provider, close std outfile, stop meter provider collection
+	defer func() {
+		if shutdownErr := tp.Shutdown(ctx); shutdownErr != nil {
+			log.Fatal(shutdownErr)
+		}
+
+		/* if fileErr := outfile.Close(); fileErr != nil {
+			log.Fatal(fileErr)
+		} */
+
+		if stopErr := mp.Stop(ctx); stopErr != nil {
+			log.Fatal(stopErr)
+		}
+
+	}()
+
+	for i := 0; i < MAX_ROUTINES; i++ {
+		wg.Add(1)
+		go makeRequest(i, method, url, body, &wg)
+	}
+
+	wg.Wait()
+
+	fmt.Printf("Successful calls: %v\n", SUCCESSES)
+	fmt.Printf("Failed calls: %v\n", MAX_ROUTINES-SUCCESSES)
+}
+
+func makeRequest(idx int, method string, url string, body []byte, wg *sync.WaitGroup) {
+	//create trace from trace provider (tp set globally for otel lib)
+	tr := otel.Tracer(fmt.Sprintf("request-%v", idx))
+	ctx, span := tr.Start(context.Background(), fmt.Sprintf("api-call-%v", idx))
+	//span.SetAttributes(attribute.String("request.idx", fmt.Sprint(i)))
+	defer span.End()
+
+	//create counters for API call metrics
+	successCtr, _ := ds_meter.NewInt64Counter("api.success_counter", metric.WithDescription("keeps count of successful API calls"))
+	failCtr, _ := ds_meter.NewInt64Counter("api.fail_counter", metric.WithDescription("keeps count of failed API calls"))
+
+	//returned retryclient with otlphttp client
+	retryClient := getClient()
+	request, _ := retryablehttp.NewRequest(method, url, bytes.NewBuffer(body))
+	//add ctx to request
+	request = request.WithContext(ctx)
+	request.Header.Set("Content-Type", "application/json")
+
+	span.AddEvent(fmt.Sprintf("making-request-%v", idx))
+	response, requestErr := retryClient.Do(request)
+	if requestErr != nil {
+		err := errors.New(fmt.Sprintf("Error in request: %v\n", requestErr))
+		span.AddEvent(fmt.Sprintf("Call failed; [URL: %v]", url))
+		span.RecordError(err)
+		fmt.Println(err)
+	} else {
+		span.AddEvent(fmt.Sprintf("Call made; [url: %v]", url))
+		if response.StatusCode != EXPECTED_RESPONSE_CODE {
+			span.SetStatus(codes.Error, response.Status)
+			failCtr.Add(ctx, 1)
+		} else {
+			span.SetStatus(codes.Ok, response.Status)
+			successCtr.Add(ctx, 1)
+		}
+	}
+	wg.Done()
 }
 
 func getClient() *retryablehttp.Client {
@@ -105,69 +146,4 @@ var ResponseHook = func(logger retryablehttp.Logger, res *http.Response) {
 	if res.StatusCode == EXPECTED_RESPONSE_CODE {
 		SUCCESSES++
 	}
-}
-
-func main() {
-	//method := "POST"
-	//body := []byte(`{"dsar_request_id":"dr0525f0b8-f494-47a3-b495-13c7b407ff06"}`)
-	//url := "http://localhost:8080/dsar/reflow"
-	method := "GET"
-	body := []byte(nil)
-	//url := "http://localhost:8001/api/v1/namespaces/default/services/rpi-gomux-service:80/proxy/isgomuxup"
-	url := "http://localhost:8080/isgomuxup"
-
-	var wg sync.WaitGroup // create wait group (empty struct)
-	tp := initTraceProvider()
-	//defer func to flush and stop trace provider and also close std outfile
-	defer func() {
-		if tpErr := tp.Shutdown(context.Background()); tpErr != nil {
-			log.Fatal(tpErr)
-		}
-
-		if fileErr := outfile.Close(); fileErr != nil {
-			log.Fatal(fileErr)
-		}
-	}()
-
-	for i := 0; i < MAX_ROUTINES; i++ {
-		wg.Add(1)
-		go makeRequest(i, method, url, body, &wg)
-	}
-
-	wg.Wait()
-
-	fmt.Printf("Successful calls: %v\n", SUCCESSES)
-	fmt.Printf("Failed calls: %v\n", MAX_ROUTINES-SUCCESSES)
-}
-
-func makeRequest(idx int, method string, url string, body []byte, wg *sync.WaitGroup) {
-	//create trace from trace provider (tp set globally for otel lib)
-	tr := otel.Tracer(fmt.Sprintf("request-%v", idx))
-	ctx, span := tr.Start(context.Background(), fmt.Sprintf("api-call-%v", idx))
-	//span.SetAttributes(attribute.String("request.idx", fmt.Sprint(i)))
-	defer span.End()
-
-	//returned retryclient with otlphttp client
-	retryClient := getClient()
-	request, _ := retryablehttp.NewRequest(method, url, bytes.NewBuffer(body))
-	//add ctx to request
-	request = request.WithContext(ctx)
-	request.Header.Set("Content-Type", "application/json")
-
-	span.AddEvent(fmt.Sprintf("making-request-%v", idx))
-	response, requestErr := retryClient.Do(request)
-	if requestErr != nil {
-		err := errors.New(fmt.Sprintf("Error in request: %v\n", requestErr))
-		span.AddEvent(fmt.Sprintf("Call failed; [URL: %v]", url))
-		span.RecordError(err)
-		fmt.Println(err)
-	} else {
-		span.AddEvent(fmt.Sprintf("Call made; [url: %v]", url))
-		if response.StatusCode != EXPECTED_RESPONSE_CODE {
-			span.SetStatus(codes.Error, response.Status)
-		} else {
-			span.SetStatus(codes.Ok, response.Status)
-		}
-	}
-	wg.Done()
 }
