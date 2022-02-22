@@ -16,26 +16,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
 )
 
-const serviceName string = "deathstar"
-
-// returns a standard console exporter.
-/*func newStdExporter(w io.Writer) (sdktrace.SpanExporter, error) {
-	// Write telemetry data to a file.
-	os.Remove("traces.txt")
-	f, err := os.Create("traces.txt")
-	if err != nil {
-		log.Fatal(err)
-	}
-	outfile = f
-
-	return stdout.New(
-		stdout.WithWriter(w),
-		// Use human-readable output.
-		stdout.WithPrettyPrint(),
-		// Do not print timestamps for the demo.
-		stdout.WithoutTimestamps(),
-	)
-}*/
+const serviceName string = "deathstar2"
 
 func InitTraceProvider() (tp *sdktrace.TracerProvider, tpErr error) {
 	//configure grpc exporter
@@ -103,3 +84,36 @@ func getAppResource() *resource.Resource {
 	)
 	return r
 }
+
+// returns a standard console exporter.
+/*func newStdExporter(w io.Writer) (sdktrace.SpanExporter, error) {
+	// Write telemetry data to a file.
+	os.Remove("traces.txt")
+	f, err := os.Create("traces.txt")
+	if err != nil {
+		log.Fatal(err)
+	}
+	outfile = f
+
+	return stdout.New(
+		stdout.WithWriter(w),
+		// Use human-readable output.
+		stdout.WithPrettyPrint(),
+		// Do not print timestamps for the demo.
+		stdout.WithoutTimestamps(),
+	)
+}*/
+
+//returns http exporter
+/*
+func newHttpExporter() (exporter *otlptrace.Exporter, err error) {
+	exporter, err = otlptrace.New(context.Background(), otlptracehttp.NewClient(otlptracehttp.WithEndpoint(COLLECTER_URL)))
+	if err != nil {
+		fmt.Errorf("error initializing exporter [error: %v]", err)
+		//log.Fatal(err)
+		return
+	}
+
+	return
+}
+*/
