@@ -6,10 +6,11 @@ require (
 	github.com/hashicorp/go-retryablehttp v0.7.0
 	github.com/pkg/errors v0.9.1
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.29.0
-	go.opentelemetry.io/otel v1.4.0
+	go.opentelemetry.io/otel v1.4.1
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.3.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.3.0
-	go.opentelemetry.io/otel/sdk v1.3.0
+	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.4.1
+	go.opentelemetry.io/otel/sdk v1.4.1
 )
 
 require (
@@ -23,7 +24,7 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/internal/retry v1.3.0 // indirect
 	go.opentelemetry.io/otel/internal/metric v0.27.0 // indirect
 	go.opentelemetry.io/otel/metric v0.27.0 // indirect
-	go.opentelemetry.io/otel/trace v1.4.0 // indirect
+	go.opentelemetry.io/otel/trace v1.4.1 // indirect
 	go.opentelemetry.io/proto/otlp v0.11.0 // indirect
 	golang.org/x/net v0.0.0-20210405180319-a5a99cb37ef4 // indirect
 	golang.org/x/sys v0.0.0-20210510120138-977fb7262007 // indirect
