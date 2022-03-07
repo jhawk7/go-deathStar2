@@ -4,28 +4,29 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	_ "io"
 	"log"
 	"net/http"
-	_ "os"
 	"sync"
 
+	_ "golang.org/x/oauth2"
+
+	_ "github.com/cbdr/cb_go_oauth2"
 	retryablehttp "github.com/hashicorp/go-retryablehttp"
-	"github.com/jhawk7/go-deathStar2/pkg/opentel"
+	"github.com/jhawk7/go-opentel/opentel"
 	"github.com/pkg/errors"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/global"
 )
 
 const MAX_ROUTINES int = 5
 const EXPECTED_RESPONSE_CODE int = 200
-const serviceName string = "deathstar"
+
 var ds_meter metric.Meter
-//var outfile *os.File
+
 var SUCCESSES int = 0
+var FAILURES int = 0
 
 func main() {
 	method := "GET"
@@ -33,48 +34,16 @@ func main() {
 	url := "http://node5.local/isgomuxup"
 
 	var wg sync.WaitGroup // create wait group (empty struct)
-	ctx := context.Background()
 
-	//init global meter provider
-	mp, mpErr := opentel.InitMeterProvider()
-	if mpErr != nil {
-		log.Fatal(mpErr)
+	if opentelErr := opentel.InitOpentelProviders(); opentelErr != nil {
+		log.Fatal(opentelErr)
 	}
 
-	//register meterProvider as global mp for package (meterProvider -> meter -> counter)
-	global.SetMeterProvider(mp)
+	ds_meter = opentel.GetMeterProvider().Meter("deathstar2_meter")
 
-	//start metric collection
-	if collectErr := mp.Start(ctx); collectErr != nil {
-		log.Fatal(collectErr)
-	}
-
-	//create meter from meter provider (set to global variable)
-	ds_meter = global.Meter("deathstar_meter")
-
-	//init global trace provider
-	tp, tpErr := opentel.InitTraceProvider()
-	if tpErr != nil {
-		log.Fatal(tpErr)
-	}
-
-	//register traceprovider as global tp for package (traceProvider -> trace -> span)
-	otel.SetTracerProvider(tp)
-
-	//defer func to flush and stop trace provider, close std outfile, stop meter provider collection
 	defer func() {
-		if shutdownErr := tp.Shutdown(ctx); shutdownErr != nil {
-			log.Fatal(shutdownErr)
-		}
-
-		/* if fileErr := outfile.Close(); fileErr != nil {
-			log.Fatal(fileErr)
-		} */
-
-		if stopErr := mp.Stop(ctx); stopErr != nil {
-			log.Fatal(stopErr)
-		}
-
+		shutdownErr := opentel.ShutdownOpentelProviders()
+		ErrorHandler(shutdownErr, true)
 	}()
 
 	for i := 0; i < MAX_ROUTINES; i++ {
@@ -85,14 +54,14 @@ func main() {
 	wg.Wait()
 
 	fmt.Printf("Successful calls: %v\n", SUCCESSES)
-	fmt.Printf("Failed calls: %v\n", MAX_ROUTINES-SUCCESSES)
+	fmt.Printf("Failed calls: %v\n", FAILURES)
 }
 
 func makeRequest(idx int, method string, url string, body []byte, wg *sync.WaitGroup) {
 	//create trace from trace provider (tp set globally for otel lib)
-	tr := otel.Tracer(fmt.Sprintf("request-%v", idx))
+	tr := opentel.GetTraceProvider().Tracer(fmt.Sprintf("request-%v", idx))
 	ctx, span := tr.Start(context.Background(), fmt.Sprintf("api-call-%v", idx))
-	//span.SetAttributes(attribute.String("request.idx", fmt.Sprint(i)))
+	span.SetAttributes(attribute.String("request.idx", fmt.Sprint(idx)))
 	defer span.End()
 
 	//create counters for API call metrics
@@ -127,9 +96,21 @@ func makeRequest(idx int, method string, url string, body []byte, wg *sync.WaitG
 }
 
 func getClient() *retryablehttp.Client {
+	/*conf := &cb_go_oauth2.Config{
+		ClientId: os.Getenv("CID"),
+		Secret:   []byte(os.Getenv("SECRET")),
+		TokenURL: os.Getenv("TOKEN_URL"),
+	}*/
+
+	/*httpClient := conf.Client(oauth2.NoContext)
+	httpClient.Timeout = time.Duration(15 * time.Second)
+	otelRoundTipper := otelhttp.NewTransport(httpClient.Transport)
+	httpClient.Transport = otelRoundTipper*/
+
 	retryClient := retryablehttp.NewClient()
-	//using otelhttp wrapped http client
-	retryClient.HTTPClient = &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}
+	//wrapping retryclient roudtripper with otelhttp roundtripper
+	retryClient.HTTPClient = &http.Client{Transport: otelhttp.NewTransport(retryClient.HTTPClient.Transport)}
+	//retryClient.HTTPClient = httpClient
 	retryClient.RequestLogHook = RequestHook
 	retryClient.ResponseLogHook = ResponseHook
 	retryClient.RetryMax = 3
@@ -145,5 +126,17 @@ var ResponseHook = func(logger retryablehttp.Logger, res *http.Response) {
 	fmt.Printf("URL: %v responded with Status: %v\n", res.Request.URL, res.StatusCode)
 	if res.StatusCode == EXPECTED_RESPONSE_CODE {
 		SUCCESSES++
+	} else {
+		FAILURES++
+	}
+}
+
+func ErrorHandler(err error, fatal bool) {
+	if err != nil {
+		fmt.Println(err)
+
+		if fatal {
+			panic(err)
+		}
 	}
 }
