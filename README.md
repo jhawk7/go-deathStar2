@@ -1,6 +1,6 @@
 # go-deathStar2
 ![Go](https://img.shields.io/badge/go-%2300ADD8.svg?style=flat&logo=go&logoColor=white)
-![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=for-the-badge&logo=docker&logoColor=white)
+![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white)
 
 Go deathstar2 is a fun name for a stress tester that utilizes `go routines` to make a large number of requests to an API endpoint in parallel (to simulate stress).
 
