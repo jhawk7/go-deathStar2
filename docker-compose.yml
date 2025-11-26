@@ -1,0 +1,7 @@
+services:
+  deathstar2:
+    image: "jhawk7/go-deathstar2:latest"
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
